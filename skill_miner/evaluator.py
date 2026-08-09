@@ -107,9 +107,30 @@ def _sample_prompts(cfg: Config, meta: dict, n: int) -> list[dict]:
     return samples[:n]
 
 
-def _seed_workdir(workdir: Path) -> None:
+def _git(workdir: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=workdir, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace",
+                          timeout=60, shell=True)
+
+
+def _seed_workdir(workdir: Path, check: str | None = None) -> None:
     for name, content in _FIXTURE.items():
         (workdir / name).write_text(content, encoding="utf-8", newline="\n")
+    if check == "git-clean":
+        # A repo mid-work: one clean commit behind, then uncommitted edits
+        # and an untracked file. Deliberately NO remote — a good commit
+        # skill must handle "nowhere to push" without flailing. Identity is
+        # repo-local so the machine's global git config never leaks in.
+        _git(workdir, "init", "-b", "main")
+        _git(workdir, "config", "user.name", "Eval Fixture")
+        _git(workdir, "config", "user.email", "fixture@example.com")
+        _git(workdir, "add", "-A")
+        _git(workdir, "commit", "-q", "-m", "initial project state")
+        with open(workdir / "app.py", "a", encoding="utf-8") as f:
+            f.write("\n\ndef parse_date(raw):\n    # WIP: handle both ISO and US formats\n    raise NotImplementedError\n")
+        (workdir / "scratch_notes.md").write_text(
+            "- parse_date started, not finished\n- ask about timezone handling\n",
+            encoding="utf-8")
 
 
 def _check_claude_md(workdir: Path) -> dict:
@@ -125,7 +146,23 @@ def _check_claude_md(workdir: Path) -> dict:
             "reason": f"len={len(text)} keywords={kw[:4]}" + ("" if grew else " (did not grow)"),
             "excerpt": redact(text)[:400]}
 
-_CHECKS = {"claude-md": _check_claude_md}
+def _check_git_clean(workdir: Path) -> dict:
+    """Success = at least one NEW commit beyond the seed, and a clean
+    working tree (nothing uncommitted left behind)."""
+    count = _git(workdir, "rev-list", "--count", "HEAD").stdout.strip()
+    porcelain = _git(workdir, "status", "--porcelain").stdout.strip()
+    try:
+        commits = int(count)
+    except ValueError:
+        return {"success": False, "reason": f"not a git repo? ({count[:60]})"}
+    ok = commits > 1 and not porcelain
+    log = _git(workdir, "log", "--oneline", "-3").stdout.strip()
+    return {"success": ok,
+            "reason": f"commits={commits} dirty_files={len(porcelain.splitlines()) if porcelain else 0}",
+            "excerpt": redact(log)[:400]}
+
+
+_CHECKS = {"claude-md": _check_claude_md, "git-clean": _check_git_clean}
 
 
 def _run_headless(cfg: Config, prompt: str, workdir: Path, skill_name: str,
@@ -304,7 +341,7 @@ def evaluate_skill(cfg: Config, skill_name: str, n_prompts: int = 3,
             workdir = Path(tempfile.mkdtemp(prefix=f"sm-eval-{condition}-"))
             moved = False
             try:
-                _seed_workdir(workdir)
+                _seed_workdir(workdir, check)
                 if condition == "without_skill":
                     shutil.move(str(skill_dir), str(disabled_parent / skill_name))
                     moved = True

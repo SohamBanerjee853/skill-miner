@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     p_eval = sub.add_parser("eval", help="A/B test a generated skill via headless claude")
     p_eval.add_argument("skill", help="skill name (dir under ~/.claude/skills)")
     p_eval.add_argument("--prompts", type=int, default=3, help="prompts to sample (3-5)")
-    p_eval.add_argument("--check", choices=["claude-md"], default=None,
+    p_eval.add_argument("--check", choices=["claude-md", "git-clean"], default=None,
                         help="mechanical success criterion applied to each run's workdir")
 
     args = parser.parse_args(argv)

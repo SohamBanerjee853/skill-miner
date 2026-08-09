@@ -101,7 +101,11 @@ def _sample_prompts(cfg: Config, meta: dict, n: int) -> list[dict]:
                 continue
             first = next((p["text"] for p in prompts if not p["is_correction"]),
                          prompts[0]["text"])
-            if len(first) > 40 and all(first != s["prompt"] for s in samples):
+            # Junk filter by content, not length: a raw length cutoff threw
+            # away terse imperatives ("Commit and push") that are exactly
+            # the trigger prompts of commit/close-style skills.
+            if (len(_content_words(first)) >= 2
+                    and all(first != s["prompt"] for s in samples)):
                 samples.append({"session_id": sid, "prompt": first})
                 seen_sessions.add(sid)
     return samples[:n]

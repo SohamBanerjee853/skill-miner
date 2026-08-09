@@ -128,6 +128,11 @@ def _seed_workdir(workdir: Path, check: str | None = None) -> None:
         _git(workdir, "init", "-b", "main")
         _git(workdir, "config", "user.name", "Eval Fixture")
         _git(workdir, "config", "user.email", "fixture@example.com")
+        # Harness artifacts must be invisible to git, or the cleanliness
+        # criterion counts the evaluator's own debug log as user mess
+        # (real scoring bug we hit).
+        (workdir / ".git" / "info" / "exclude").write_text(
+            f"{_DEBUG_LOG}\n.sm-seed.json\n", encoding="utf-8")
         _git(workdir, "add", "-A")
         _git(workdir, "commit", "-q", "-m", "initial project state")
         with open(workdir / "app.py", "a", encoding="utf-8") as f:
@@ -135,6 +140,9 @@ def _seed_workdir(workdir: Path, check: str | None = None) -> None:
         (workdir / "scratch_notes.md").write_text(
             "- parse_date started, not finished\n- ask about timezone handling\n",
             encoding="utf-8")
+        seed_dirty = _git(workdir, "status", "--porcelain").stdout.strip()
+        (workdir / ".sm-seed.json").write_text(json.dumps(
+            {"commits": 1, "dirty": len(seed_dirty.splitlines())}), encoding="utf-8")
 
 
 def _check_claude_md(workdir: Path) -> dict:
@@ -146,23 +154,34 @@ def _check_claude_md(workdir: Path) -> dict:
     grew = len(text) >= len(_FIXTURE["CLAUDE.md"]) + 150
     kw = [k for k in _RESUME_KEYWORDS if re.search(rf"\b{k}", text, re.I)]
     ok = grew and len(kw) >= 2
-    return {"success": ok,
+    return {"success": ok, "acted": len(text) != len(_FIXTURE["CLAUDE.md"]),
             "reason": f"len={len(text)} keywords={kw[:4]}" + ("" if grew else " (did not grow)"),
             "excerpt": redact(text)[:400]}
 
 def _check_git_clean(workdir: Path) -> dict:
-    """Success = at least one NEW commit beyond the seed, and a clean
-    working tree (nothing uncommitted left behind)."""
+    """Success = at least one NEW commit beyond the seed AND less
+    uncommitted mess than the seed left. Not "fully clean": a skill that
+    deliberately declines to blanket-add scratch files is behaving well,
+    and full cleanliness would score that judgment as failure."""
     count = _git(workdir, "rev-list", "--count", "HEAD").stdout.strip()
     porcelain = _git(workdir, "status", "--porcelain").stdout.strip()
     try:
         commits = int(count)
     except ValueError:
-        return {"success": False, "reason": f"not a git repo? ({count[:60]})"}
-    ok = commits > 1 and not porcelain
+        return {"success": False, "acted": False,
+                "reason": f"not a git repo? ({count[:60]})"}
+    seed = {"commits": 1, "dirty": 2}
+    seed_file = workdir / ".sm-seed.json"
+    if seed_file.is_file():
+        seed = json.loads(seed_file.read_text(encoding="utf-8"))
+    dirty_lines = porcelain.splitlines() if porcelain else []
+    acted = commits > seed["commits"]
+    ok = acted and len(dirty_lines) < seed["dirty"]
     log = _git(workdir, "log", "--oneline", "-3").stdout.strip()
-    return {"success": ok,
-            "reason": f"commits={commits} dirty_files={len(porcelain.splitlines()) if porcelain else 0}",
+    return {"success": ok, "acted": acted,
+            "reason": (f"commits={commits} (seed {seed['commits']}) "
+                       f"dirty={len(dirty_lines)} (seed {seed['dirty']})"),
+            "dirty_files": [redact(l.strip()) for l in dirty_lines[:10]],
             "excerpt": redact(log)[:400]}
 
 
@@ -251,7 +270,11 @@ def _failure_mode(run: dict) -> str:
     if run.get("check", {}).get("success"):
         return "succeeded"
     dispatched = run.get("tools_dispatched", {})
-    wrote = any(t in dispatched for t in ("Write", "Edit", "NotebookEdit"))
+    # check["acted"] catches acting through shell tools (git commits via
+    # Bash) that the Write/Edit dispatch test misses — without it, a run
+    # that committed via git was labeled "did_nothing".
+    wrote = (any(t in dispatched for t in ("Write", "Edit", "NotebookEdit"))
+             or run.get("check", {}).get("acted", False))
     blocked = bool(run.get("denials"))
     if wrote:
         return "attempted_but_blocked" if blocked else "attempted_but_failed"

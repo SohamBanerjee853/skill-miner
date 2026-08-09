@@ -1,0 +1,22 @@
+# Copy to ~/.skill-miner/config.toml and edit. Everything is optional.
+
+# Model used for signatures, clustering, judging, and generation.
+model = "claude-sonnet-4-6"
+
+# Clusters need at least this many sessions to become a proposal.
+min_cluster_size = 3
+
+# Projects to skip entirely (matched case-insensitively as substring or glob
+# against both the encoded dir name under ~/.claude/projects and the decoded
+# project path).
+exclude_projects = [
+    # "secret-project",
+    # "*client-x*",
+]
+
+# Headless eval limits.
+eval_max_turns = 15
+eval_timeout_s = 600
+
+# Override if your Claude home is elsewhere.
+# claude_dir = "~/.claude"

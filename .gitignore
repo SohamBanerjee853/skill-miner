@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+
+# skill-miner data — transcript caches, signatures, proposals, eval outputs.
+# The default data dir is ~/.skill-miner (outside the repo), but never track
+# a local one either: session records are personal even after redaction.
+.skill-miner/
+config.toml
+
+# OS noise
+Thumbs.db
+.DS_Store
